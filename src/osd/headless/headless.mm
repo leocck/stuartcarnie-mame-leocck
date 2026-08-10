@@ -207,6 +207,8 @@ static_assert(InputItemID::InputItemID_ABSOLUTE_MAXIMUM == input_item_id::ITEM_I
 	InputClass *_mouse;
 	InputClass *_keyboard;
 
+	NSMutableDictionary<NSNumber *, NSDictionary *> *_activeCheats;
+
 	bool _isEmpty;
 }
 
@@ -418,6 +420,7 @@ static_assert(InputItemID::InputItemID_ABSOLUTE_MAXIMUM == input_item_id::ITEM_I
 	_mouse = nil;
 	_keyboard = nil;
 	_supportsSave = NO;
+	@synchronized (self) { [_activeCheats removeAllObjects]; }
 
 	_manager->set_machine(nullptr);
 
@@ -484,6 +487,97 @@ static_assert(InputItemID::InputItemID_ABSOLUTE_MAXIMUM == input_item_id::ITEM_I
 	return _machine->phase() == machine_phase::RUNNING;
 }
 
+#pragma mark - memory / cheats
+
+- (address_space *)_programSpace
+{
+	if (!_machine) return nullptr;
+	device_t *cpu = _machine->root_device().subdevice(":maincpu");
+	if (!cpu) return nullptr;
+	device_memory_interface *memintf;
+	if (!cpu->interface(memintf) || !memintf->has_space(AS_PROGRAM))
+		return nullptr;
+	return &memintf->space(AS_PROGRAM);
+}
+
+- (NSArray<NSDictionary *> *)readableMemoryRegions
+{
+	address_space *space = [self _programSpace];
+	if (!space) return @[];
+
+	BOOL bigEndian = space->endianness() == ENDIANNESS_BIG;
+	NSMutableArray *regions = [NSMutableArray array];
+	NSMutableSet *seenShares = [NSMutableSet set];
+
+	for (address_map_entry &entry : space->map()->m_entrylist) {
+		if (entry.m_write.m_type != AMH_RAM) continue;
+
+		if (entry.m_share) {
+			NSString *share = @(entry.m_share);
+			if ([seenShares containsObject:share]) continue;
+			[seenShares addObject:share];
+		}
+
+		offs_t start = entry.m_addrstart & space->addrmask();
+		offs_t end   = entry.m_addrend   & space->addrmask();
+		offs_t size  = end - start + 1;
+
+		void *ptr = space->get_write_ptr(start);
+		if (!ptr) continue;
+
+		[regions addObject:@{
+			@"address":    @(start),
+			@"size":       @(size),
+			@"name":       entry.m_share ? @(entry.m_share) : @"",
+			@"bytes":      [NSData dataWithBytes:ptr length:size],
+			@"bigEndian":  @(bigEndian),
+		}];
+	}
+	return regions;
+}
+
+- (void)setCheat:(uint32_t)index address:(uint32_t)address value:(uint32_t)value size:(uint8_t)size enabled:(BOOL)enabled
+{
+	@synchronized (self) {
+		if (!_activeCheats) _activeCheats = [NSMutableDictionary new];
+
+		NSNumber *key = @(index);
+		if (enabled) {
+			_activeCheats[key] = @{
+				@"address": @(address),
+				@"value":   @(value),
+				@"size":    @(size),
+			};
+		} else {
+			[_activeCheats removeObjectForKey:key];
+		}
+	}
+}
+
+- (void)_applyCheats
+{
+	NSDictionary *cheats;
+	@synchronized (self) {
+		if (_activeCheats.count == 0) return;
+		cheats = [_activeCheats copy];
+	}
+
+	address_space *space = [self _programSpace];
+	if (!space) return;
+
+	for (NSDictionary *cheat in cheats.allValues) {
+		offs_t addr  = [cheat[@"address"] unsignedIntValue];
+		uint32_t val = [cheat[@"value"] unsignedIntValue];
+		uint8_t size = [cheat[@"size"] unsignedCharValue];
+
+		switch (size) {
+			case 1: space->write_byte(addr, val);  break;
+			case 2: space->write_word(addr, val);   break;
+			case 4: space->write_dword(addr, val);  break;
+		}
+	}
+}
+
 #pragma mark - Execution
 
 - (BOOL)execute
@@ -497,6 +591,7 @@ static_assert(InputItemID::InputItemID_ABSOLUTE_MAXIMUM == input_item_id::ITEM_I
 		};
 	}
 
+	[self _applyCheats];
 	_machine->headless_run();
 
 	return YES;
