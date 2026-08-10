@@ -104,6 +104,16 @@ OE_EXPORTED_CLASS
 - (NSData *)serializeState;
 - (BOOL)deserializeState:(NSData *)data;
 
+#pragma mark - memory / cheats
+
+/// Returns RAM regions for the main CPU's program address space.
+/// Each dictionary has keys: @"address" (NSNumber), @"size" (NSNumber),
+/// @"name" (NSString), @"bytes" (NSData), @"bigEndian" (NSNumber<BOOL>).
+- (NSArray<NSDictionary *> *)readableMemoryRegions;
+
+/// Enable or disable a per-frame constant-write cheat.
+- (void)setCheat:(uint32_t)index address:(uint32_t)address value:(uint32_t)value size:(uint8_t)size enabled:(BOOL)enabled;
+
 #pragma mark - execution
 
 - (BOOL)execute;
