@@ -121,6 +121,9 @@ void menu_main::populate(float &customtop, float &custombottom)
 
 		item_append(_("Machine Information"), "", 0, (void *)GAME_INFO);
 
+		if (machine().options().cheat())
+			item_append(_("Cheat"), "", 0, (void *)CHEAT);
+
 		item_append(menu_item_type::SEPARATOR);
 
 		return;
